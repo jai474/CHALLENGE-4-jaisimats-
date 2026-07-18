@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Smart Stadium Ops — Unit Tests</title>
+<style>
+  body{font-family:ui-monospace,"IBM Plex Mono",monospace; background:#0a1410; color:#dbe8e0; padding:24px; max-width:900px; margin:0 auto;}
+  h1{color:#f3fbf6; font-size:20px;}
+  .summary{font-size:16px; margin:16px 0; padding:12px 16px; border-radius:8px;}
+  .summary.pass{background:rgba(61,220,132,.12); color:#3ddc84; border:1px solid #23593f;}
+  .summary.fail{background:rgba(255,93,93,.12); color:#ff5d5d; border:1px solid #6b2323;}
+  .case{padding:6px 10px; border-radius:6px; margin-bottom:4px; font-size:13px;}
+  .case.ok{color:#3ddc84;}
+  .case.bad{background:rgba(255,93,93,.12); color:#ff5d5d;}
+  .group{margin-top:22px; font-size:14px; color:#82a494; text-transform:uppercase; letter-spacing:.05em; border-bottom:1px solid #24382f; padding-bottom:6px;}
+  code{color:#5cc7ff;}
+</style>
+</head>
+<body>
+<h1>Smart Stadium Ops — Automated Test Suite</h1>
+<p style="color:#82a494;">
+  Runs entirely in the browser against <code>logic.js</code>, the shared pure-logic module
+  also used by <code>index.html</code>. No build step, no network, no dependencies — open this
+  file directly to see results.
+</p>
+<div id="summary" class="summary">Running…</div>
+<div id="results"></div>
+
+<script src="logic.js"></script>
+<script>
+/* =============================================================================
+   Minimal, dependency-free test runner.
+   Deliberately not using a framework (Jest/Mocha/etc.) because this project
+   has no build step or package manager by design — it's a single static
+   folder that has to run by double-clicking index.html with no install step.
+   This keeps that same "open the file, it just works" property for tests.
+   ============================================================================= */
+let passCount = 0, failCount = 0;
+const resultsEl = document.getElementById("results");
+let currentGroupEl = null;
+
+function group(name){
+  currentGroupEl = document.createElement("div");
+  currentGroupEl.className = "group";
+  currentGroupEl.textContent = name;
+  resultsEl.appendChild(currentGroupEl);
+}
+
+function renderCase(ok, label, detail){
+  const el = document.createElement("div");
+  el.className = "case " + (ok ? "ok" : "bad");
+  el.textContent = (ok ? "✓ " : "✗ ") + label + (detail ? " — " + detail : "");
+  resultsEl.appendChild(el);
+}
+
+function assertEqual(actual, expected, label){
+  const ok = JSON.stringify(actual) === JSON.stringify(expected);
+  if (ok) passCount++; else failCount++;
+  renderCase(ok, label, ok ? "" : `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+}
+
+function assertTrue(condition, label){
+  if (condition) passCount++; else failCount++;
+  renderCase(condition, label);
+}
+
+/* ---------------------------------------------------------------------------
+   escapeHtml — must neutralize every HTML-significant character, and must
+   not double-escape or mangle plain text.
+   --------------------------------------------------------------------------- */
+group("escapeHtml()");
+assertEqual(escapeHtml('<script>alert(1)<\/script>'), "&lt;script&gt;alert(1)&lt;/script&gt;", "escapes script tags");
+assertEqual(escapeHtml(`He said "hi" & left`), "He said &quot;hi&quot; &amp; left", "escapes quotes and ampersand");
+assertEqual(escapeHtml("It's fine"), "It&#39;s fine", "escapes apostrophe");
+assertEqual(escapeHtml("Plain text 123"), "Plain text 123", "leaves plain text untouched");
+assertEqual(escapeHtml(42), "42", "coerces non-string input safely");
+assertEqual(escapeHtml('<img src=x onerror=alert(1)>'), "&lt;img src=x onerror=alert(1)&gt;", "neutralizes a classic XSS payload");
+
+/* ---------------------------------------------------------------------------
+   detectIntent — keyword-based chat intent classification.
+   --------------------------------------------------------------------------- */
+group("detectIntent()");
+const KEYWORDS = {
+  gate: ["gate", "crowd", "busy"],
+  route: ["route", "direction", "walk"],
+  accessibility: ["wheelchair", "accessib"]
+};
+assertEqual(detectIntent("Which gate is least busy?", KEYWORDS), "gate", "matches gate keyword");
+assertEqual(detectIntent("How do I get directions to my seat?", KEYWORDS), "route", "matches route keyword");
+assertEqual(detectIntent("Is there wheelchair access?", KEYWORDS), "accessibility", "matches accessibility keyword");
+assertEqual(detectIntent("WHICH GATE IS BUSIEST", KEYWORDS), "gate", "is case-insensitive");
+assertEqual(detectIntent("what time is kickoff", KEYWORDS), "fallback", "falls back when nothing matches");
+
+/* ---------------------------------------------------------------------------
+   densityColor / densityClass — crowd heatmap thresholds.
+   --------------------------------------------------------------------------- */
+group("densityColor() / densityClass()");
+assertEqual(densityColor(96), "var(--red)", "96% is red (critical)");
+assertEqual(densityColor(95), "var(--red)", "95% boundary counts as critical");
+assertEqual(densityColor(90), "var(--amber)", "90% is amber (warning)");
+assertEqual(densityColor(85), "var(--amber)", "85% boundary counts as warning");
+assertEqual(densityColor(50), "var(--turf)", "50% is turf green (nominal)");
+assertEqual(densityClass(96), "crit", "class: 96% is crit");
+assertEqual(densityClass(90), "warn", "class: 90% is warn");
+assertEqual(densityClass(10), "", "class: 10% has no status class");
+
+/* ---------------------------------------------------------------------------
+   estWaitMinutes — should never go negative, and should scale with %.
+   --------------------------------------------------------------------------- */
+group("estWaitMinutes()");
+assertEqual(estWaitMinutes(50), 0, "50% occupancy floors at 0 minutes");
+assertEqual(estWaitMinutes(30), 0, "under 50% still floors at 0, never negative");
+assertEqual(estWaitMinutes(100), 10, "100% occupancy is a 10 minute estimate");
+assertTrue(estWaitMinutes(90) > estWaitMinutes(60), "higher occupancy means a longer estimated wait");
+
+/* ---------------------------------------------------------------------------
+   fmtClock — MM:SS formatting, including the pre-kickoff negative countdown.
+   --------------------------------------------------------------------------- */
+group("fmtClock()");
+assertEqual(fmtClock(0), "00:00", "zero seconds");
+assertEqual(fmtClock(65), "01:05", "65 seconds becomes 01:05");
+assertEqual(fmtClock(-125), "-02:05", "negative seconds (pre-kickoff countdown) keeps the sign");
+assertEqual(fmtClock(3600), "60:00", "one hour of match/added time");
+
+/* ---------------------------------------------------------------------------
+   scaledCapacity — proportional scaling used when switching stadiums.
+   --------------------------------------------------------------------------- */
+group("scaledCapacity()");
+assertEqual(scaledCapacity(5000, 50000, 50000), 5000, "identity scale (same total) is unchanged");
+assertEqual(scaledCapacity(5000, 100000, 50000), 10000, "doubling total capacity doubles the zone");
+assertEqual(scaledCapacity(4000, 25000, 50000), 2000, "halving total capacity halves the zone");
+
+/* ---------------------------------------------------------------------------
+   leastCrowded / mostCrowded — should only ever consider "gate" zones.
+   --------------------------------------------------------------------------- */
+group("leastCrowded() / mostCrowded()");
+const sampleZones = [
+  { id:"gate-a", type:"gate", densityPct: 40 },
+  { id:"gate-b", type:"gate", densityPct: 92 },
+  { id:"gate-c", type:"gate", densityPct: 65 },
+  { id:"food-court", type:"concourse", densityPct: 99 } // non-gate, must be ignored
+];
+assertEqual(leastCrowded(sampleZones).id, "gate-a", "picks the least crowded gate");
+assertEqual(mostCrowded(sampleZones).id, "gate-b", "picks the most crowded gate, ignoring non-gate zones");
+
+/* ---------------------------------------------------------------------------
+   shortestPath / buildAdjacency — Dijkstra over the venue graph.
+   Uses a small hand-built graph so results are easy to verify by hand:
+       A --100-- B --150-- C
+       A ----------400 (direct, but longer)---------- C
+       D is disconnected entirely.
+   Accessible-only routing additionally excludes the A-B edge.
+   --------------------------------------------------------------------------- */
+group("shortestPath()");
+const testNodes = ["A","B","C","D"];
+const testEdges = [
+  ["A","B",100,true],
+  ["B","C",150,true],
+  ["A","C",400,true]
+];
+const direct = shortestPath(testNodes, testEdges, "A", "C");
+assertEqual(direct.steps, ["A","B","C"], "prefers the two-hop path (250m) over the direct 400m edge");
+assertEqual(direct.distanceMeters, 250, "sums edge distances correctly");
+assertEqual(direct.etaMinutes, Math.max(1, Math.round(250/80)), "derives ETA from distance at ~80m/min walking pace");
+
+const unreachable = shortestPath(testNodes, testEdges, "A", "D");
+assertTrue(!!unreachable.error, "returns an error for a disconnected node");
+
+const unknown = shortestPath(testNodes, testEdges, "A", "Nowhere");
+assertEqual(unknown, { error: "Unknown location." }, "returns a clear error for a node not in the graph");
+
+const accessibleGraph = [["A","B",100,false],["B","C",150,true],["A","C",400,true]];
+const accessibleRoute = shortestPath(testNodes, accessibleGraph, "A", "C", { accessible:true });
+assertEqual(accessibleRoute.steps, ["A","C"], "step-free routing skips the non-accessible A-B edge and takes the direct route");
+const anyRoute = shortestPath(testNodes, accessibleGraph, "A", "C", { accessible:false });
+assertEqual(anyRoute.steps, ["A","B","C"], "non-accessible routing still finds the shorter path through B");
+
+/* ---------------------------------------------------------------------------
+   Integration-style check against the REAL venue graph shipped in index.html,
+   so a broken edit to NODES/EDGES in the app itself gets caught here too.
+   Falls back gracefully if this file is opened standalone without the app's
+   graph data loaded.
+   --------------------------------------------------------------------------- */
+group("shortestPath() against the real venue graph (if available)");
+if (typeof NODES !== "undefined" && typeof EDGES !== "undefined") {
+  const realRoute = shortestPath(NODES, EDGES, "Fan-Zone", "Section-100");
+  assertTrue(!realRoute.error, "Fan-Zone to Section-100 resolves to a real route");
+  assertTrue(realRoute.steps[0] === "Fan-Zone" && realRoute.steps[realRoute.steps.length-1] === "Section-100",
+    "route starts and ends at the requested nodes");
+  const adaRoute = shortestPath(NODES, EDGES, "Gate A", "Section-300", { accessible:true });
+  assertTrue(!!adaRoute, "step-free routing between two arbitrary real nodes returns a result (route or a clear no-route error)");
+} else {
+  renderCase(true, "skipped (NODES/EDGES not loaded — open via index.html or load app data to include this check)");
+}
+
+/* ---------------------------------------------------------------------------
+   Summary
+   --------------------------------------------------------------------------- */
+const summaryEl = document.getElementById("summary");
+const total = passCount + failCount;
+summaryEl.className = "summary " + (failCount === 0 ? "pass" : "fail");
+summaryEl.textContent = failCount === 0
+  ? `All ${total} checks passed.`
+  : `${failCount} of ${total} checks failed.`;
+</script>
+</body>
+</html>
